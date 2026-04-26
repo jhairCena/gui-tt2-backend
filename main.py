@@ -6,8 +6,10 @@ from pydantic import BaseModel                               # validación de da
 from datetime import date                                    # tipo fecha
 from database import engine, SessionLocal                    # motor y sesiones
 import models                                                # importa módulo models
-from models import Base, Paciente                            # modelos y base
+from models import Base, Paciente, Termografia               # modelos y base
 from database import DATABASE_URL                            # verifica la URL
+from typing import List
+
 print("DATABASE_URL:", DATABASE_URL)                         # imprime en terminal
 
 Base.metadata.create_all(bind=engine)                        # crea tablas si no existen
@@ -39,18 +41,45 @@ class PacienteSchema(BaseModel):                             # esquema de entrad
     class Config:                                            # config de pydantic
         from_attributes = True                               # permite ORM → schema
 
+class TermografiaPayload(BaseModel):                         # esquema termografía
+    paciente_id: int                                         # id del paciente
+    fecha:       str                                         # fecha de la sesión
+    imagenes:    List[str]                                   # array de URLs Drive
+
 @app.get("/")                                                # ruta de prueba
 def root():
-    return {"status": "ok"}                                  # respuesta simple
+    return {"status": "ok"}
 
 @app.get("/pacientes")                                       # obtener todos los pacientes
 def obtener_pacientes(db: Session = Depends(get_db)):
-    return db.query(Paciente).all()                          # retorna lista completa
+    return db.query(Paciente).all()
 
 @app.post("/pacientes")                                      # registrar paciente
 def crear_paciente(paciente: PacienteSchema, db: Session = Depends(get_db)):
     nuevo = Paciente(**paciente.dict())                      # crea objeto paciente
-    db.add(nuevo)                                            # agrega a la sesión
-    db.commit()                                              # guarda en BD
-    db.refresh(nuevo)                                        # refresca el objeto
-    return nuevo                                             # retorna el paciente creado
+    db.add(nuevo)
+    db.commit()
+    db.refresh(nuevo)
+    return nuevo
+
+@app.post("/termografia")                                    # guardar sesión termográfica
+def guardar_termografia(data: TermografiaPayload, db: Session = Depends(get_db)):
+    registro = Termografia(
+        paciente_id = data.paciente_id,
+        fecha       = data.fecha,
+        imagenes    = data.imagenes
+    )
+    db.add(registro)
+    db.commit()
+    db.refresh(registro)
+    return {"ok": True, "id": registro.id}
+
+@app.get("/termografia/{paciente_id}/latest")                # última sesión del paciente
+def get_latest_termografia(paciente_id: int, db: Session = Depends(get_db)):
+    registro = db.query(Termografia) \
+        .filter(Termografia.paciente_id == paciente_id) \
+        .order_by(Termografia.created_at.desc()) \
+        .first()
+    if not registro:
+        return {"imagenes": [], "fecha": None}
+    return {"imagenes": registro.imagenes, "fecha": registro.fecha}
